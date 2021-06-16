@@ -1,0 +1,1865 @@
+package app
+
+import (
+	"bitbucket.org/kfc/mthserver/mocks"
+	"bitbucket.org/kfc/mthserver/model/request"
+	"bitbucket.org/kfc/mthserver/model/response"
+	"bitbucket.org/kfc/mthserver/model/table"
+	cm "bitbucket.org/kfc/mthserver/shared/common"
+	"bitbucket.org/kfc/mthserver/shared/config"
+	"fmt"
+	_ "github.com/jinzhu/gorm/dialects/mysql"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"testing"
+)
+
+var testConfig = &config.Topics{
+	CreateOrder: "CreateOrder_Topic",
+}
+
+const (
+	// Test info
+	outletCode            = "outlet-001"
+	orderID               = "0319N209001"
+	orderAmount           = 100000
+	cityName              = "Jakarta"
+	areaName              = "Area 51"
+	address               = "Jl. Sidobali No.2, Muja Muju, Kec. Umbulharjo, Kota Yogyakarta, Daerah Istimewa Yogyakarta 55165, Indonesia"
+	userID                = "user001"
+	menuGroupCode         = "testGroupCode"
+	menuItemCode          = "testItemCode"
+	testModifierItemCode  = "testModifierItemCode"
+	testModifierGroupCode = "testModifierGroupCode"
+	testPriceType         = "testPriceType"
+	orderType             = "testOrderType"
+	orderTypeHMD          = "HMD"
+	orderTypePNP          = "PNP"
+	testMenuSetCode       = "testMenuSetCode"
+	testMenuSetItemCode   = "testMenuSetItemCode"
+
+	// order status
+	INPROGRESS        = "INPROGRESS"
+	INIT              = "INIT"
+	PAYMENT_SUCCESS   = "PAYMENT_SUCCESS"
+	EXPIRED           = "EXPIRED"
+	TRANSFERRED       = "TRANSFERRED"
+	CONFIRMED         = "CONFIRMED"
+	PREPARED          = "PREPARED"
+	ON_DELIVERY       = "ON_DELIVERY"
+	COMPLETED         = "COMPLETED"
+	BAD               = "BAD"
+	CANCELLED         = "CANCELLED"
+	FAIL_CREATE_ORDER = "FAIL_CREATE_ORDER"
+
+	// store details
+	testName     = "testName"
+	geofenceType = "testType"
+	TestLat      = -6.2581656
+	TestLong     = 106.8989599
+)
+
+func Test_OrderDetails_GetOne_MustReturnError(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+
+	var OrderDetailsParams request.OrderDetailsParams
+	orderRepoMock.On("GetOne", nil, OrderDetailsParams.OrderID).Return(nil)
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+
+	data, err := srvc.OrderDetails(OrderDetailsParams)
+	if err != nil {
+		assert.Equal(t, err.Error(), "Order not exist.")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderDetails_InvalidUser_MustReturnError(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+
+	var OrderDetailsParams request.OrderDetailsParams
+	orderRepoMock.On("GetOne", nil, OrderDetailsParams.OrderID).Return(&table.Order{
+		UserID: userID,
+	})
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+
+	data, err := srvc.OrderDetails(OrderDetailsParams)
+	if err != nil {
+		assert.Equal(t, err.Error(), "Forbidden")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderDetails_MustReturnSuccess(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	converterMock := new(mocks.IOrderConverterService)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+
+	var OrderDetailsParams request.OrderDetailsParams
+	OrderDetailsParams.UserID = userID
+	OrderDetailsParams.OrderID = orderID
+	orderRepoMock.On("GetOne", nil, OrderDetailsParams.OrderID).Return(&table.Order{
+		UserID: userID,
+	})
+	converterMock.On("RawDataResponse", "").Return(request.OrderRequest{
+		OrderID:          orderID,
+		OrderCalculation: nil,
+	})
+	orderRepoMock.On("GetOrderStatusHistory", nil, orderID).Return([]*request.OrderStatusHistory{})
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.OrderDetails(OrderDetailsParams)
+	if err != nil {
+		assert.Equal(t, err.Error(), "Forbidden")
+	}
+	assert.NotNil(t, data, nil)
+}
+
+func Test_OrderDetails_MustReturnSuccess_ValidOrderCalculation(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	converterMock := new(mocks.IOrderConverterService)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+
+	var OrderDetailsParams request.OrderDetailsParams
+	OrderDetailsParams.UserID = userID
+	OrderDetailsParams.OrderID = orderID
+	orderRepoMock.On("GetOne", nil, OrderDetailsParams.OrderID).Return(&table.Order{
+		UserID: userID,
+	})
+	converterMock.On("RawDataResponse", "").Return(request.OrderRequest{
+		OrderID:          orderID,
+		OrderCalculation: []request.OrderCalculationKeyValue{
+			{
+				Key: cm.KeyVoucherAmount,
+				Value: 1000,
+			},
+			{
+				Key: string(cm.OCTotalSales),
+				Value: 10000,
+			},
+			{
+				Key: string(cm.OCValueAddedTax),
+				Value: 1200,
+			},
+			{
+				Key: string(cm.OCStorePercentage),
+				Value: 1680,
+			},
+		},
+	})
+	orderRepoMock.On("GetOrderStatusHistory", nil, orderID).Return([]*request.OrderStatusHistory{})
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.OrderDetails(OrderDetailsParams)
+	if err != nil {
+		assert.Equal(t, err.Error(), "Forbidden")
+	}
+	assert.NotNil(t, data, nil)
+}
+
+func Test_OrderHistory_MustReturnSuccess(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+
+	var OrderHistoryParams request.OrderHistoryParams
+	OrderHistoryParams.UserId = userID
+	OrderHistoryParams.OrderStatus = INPROGRESS
+	orderRepoMock.On("GetOrderFromStatus", nil, OrderHistoryParams.OrderStatus, 1, 10, userID).Return([]*table.Order{
+		&table.Order{
+			OrderID: orderID,
+		},
+	})
+	orderRepoMock.On("GetOrderFromStatusCount", nil, OrderHistoryParams.OrderStatus, userID).Return(int64(1))
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+
+	data, err := srvc.OrderHistory(OrderHistoryParams, 1, 10)
+	if err != nil {
+		assert.Equal(t, err.Error(), "Forbidden")
+	}
+	assert.NotNil(t, data, nil)
+}
+
+func Test_OrderConfirmDana_GetOne_MustReturnError(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+
+	var req request.ConfirmDanaOrderParams
+	req.OrderId = userID
+
+	orderRepoMock.On("GetOne", nil, req.OrderId).Return(&table.Order{
+		UserID: userID,
+	})
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+
+	data, err := srvc.ConfirmDanaOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "Order not exist.")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConfirmDana__GetStore_MustReturnError(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetStoreRepository").Return(storeRepoMock)
+
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+
+	var req request.ConfirmDanaOrderParams
+	req.OrderId = userID
+
+	orderRepoMock.On("GetOne", nil, req.OrderId).Return(&table.Order{
+		UserID:  userID,
+		RawData: "json",
+	})
+
+	storeRepoMock.On("GetOne", nil, "").Return(nil)
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.StoreRepo = storeRepoMock
+
+	data, err := srvc.ConfirmDanaOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "outlet  doesn't exist")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConfirmDana__OutletOffline_MustReturnError(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	posServiceMock := new(mocks.IPosService)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetStoreRepository").Return(storeRepoMock)
+	reposFactory.On("GetOfflineOutletRepo").Return(offlineOutletRepoMock)
+
+	orderRepoMock.On("GetDB", true).Return(nil)
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, "").Return(false)
+	posServiceMock.On("UpdateOrderStatus", request.UpdateRequest{
+		OrderID:            "",
+		Status:             CANCELLED,
+		Reason:             "Outlet is Inactive",
+		Type:               "",
+		Source:             "SYSTEM",
+		CaseOfCancellation: "POS_OFFLINE",
+	}).Return(nil)
+
+	var req request.ConfirmDanaOrderParams
+	req.OrderId = userID
+
+	orderRepoMock.On("GetOne", nil, req.OrderId).Return(&table.Order{
+		UserID:  userID,
+		RawData: "json",
+	})
+
+	storeRepoMock.On("GetOne", nil, "").Return(&table.Store{})
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.PosService = posServiceMock
+
+	data, err := srvc.ConfirmDanaOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "outlet  is offline")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConfirmDana__OutletOnline_InvalidStatus_MustReturnError(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	posServiceMock := new(mocks.IPosService)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetStoreRepository").Return(storeRepoMock)
+	reposFactory.On("GetOfflineOutletRepo").Return(offlineOutletRepoMock)
+
+	orderRepoMock.On("GetDB", true).Return(nil)
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, "").Return(true)
+	posServiceMock.On("UpdateOrderStatus", request.UpdateRequest{
+		OrderID:            "",
+		Status:             CANCELLED,
+		Reason:             "Outlet is Inactive",
+		Type:               "",
+		Source:             "SYSTEM",
+		CaseOfCancellation: "POS_OFFLINE",
+	}).Return(nil)
+
+	var req request.ConfirmDanaOrderParams
+	req.OrderId = userID
+
+	orderRepoMock.On("GetOne", nil, req.OrderId).Return(&table.Order{
+		UserID:  userID,
+		RawData: "json",
+	})
+
+	storeRepoMock.On("GetOne", nil, "").Return(&table.Store{})
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.PosService = posServiceMock
+
+	data, err := srvc.ConfirmDanaOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "Order status is already updated.")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConfirmDana__OutletOnline_UpdateStatus_MustReturnError(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	posServiceMock := new(mocks.IPosService)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetStoreRepository").Return(storeRepoMock)
+	reposFactory.On("GetOfflineOutletRepo").Return(offlineOutletRepoMock)
+
+	var req request.ConfirmDanaOrderParams
+	req.OrderId = orderID
+	req.Status = PAYMENT_SUCCESS
+
+	orderRepoMock.On("GetDB", true).Return(nil)
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, "").Return(false)
+	posServiceMock.On("UpdateOrderStatus", request.UpdateRequest{
+		OrderID:            "",
+		Status:             CANCELLED,
+		Reason:             "Outlet is Inactive",
+		Type:               "",
+		Source:             "SYSTEM",
+		CaseOfCancellation: "POS_OFFLINE",
+	}).Return(fmt.Errorf("error"))
+
+	orderRepoMock.On("GetOne", nil, req.OrderId).Return(&table.Order{
+		UserID:      userID,
+		RawData:     `{"createdDate":"2020-04-28T11:13:46+05:30"}`,
+		OrderStatus: INIT,
+	})
+
+	storeRepoMock.On("GetOne", nil, "").Return(&table.Store{})
+	orderRepoMock.On("ConfirmPayment", nil, &table.Order{
+		UserID:      "",
+		RawData:     "",
+		OrderStatus: "",
+	}, req).Return(nil)
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.PosService = posServiceMock
+
+	data, err := srvc.ConfirmDanaOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "outlet  is offline")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConfirmDana__OutletOnline_InitStatus_ConfirmStatus_MustReturnError(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	posServiceMock := new(mocks.IPosService)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetStoreRepository").Return(storeRepoMock)
+	reposFactory.On("GetOfflineOutletRepo").Return(offlineOutletRepoMock)
+
+	var req request.ConfirmDanaOrderParams
+	req.OrderId = orderID
+	req.Status = PAYMENT_SUCCESS
+
+	orderRepoMock.On("GetDB", true).Return(nil)
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, "").Return(true)
+	posServiceMock.On("UpdateOrderStatus", request.UpdateRequest{
+		OrderID:            "",
+		Status:             CANCELLED,
+		Reason:             "Outlet is Inactive",
+		Type:               "",
+		Source:             "SYSTEM",
+		CaseOfCancellation: "POS_OFFLINE",
+	}).Return(nil)
+
+	orderRepoMock.On("GetOne", nil, req.OrderId).Return(&table.Order{
+		UserID:      userID,
+		RawData:     `{"createdDate":"2020-04-28T11:13:46+05:30"}`,
+		OrderStatus: INIT,
+	})
+
+	storeRepoMock.On("GetOne", nil, "").Return(&table.Store{})
+	orderRepoMock.On("ConfirmPayment", nil, &table.Order{
+		UserID:      "",
+		RawData:     "",
+		OrderStatus: "",
+	}, req).Return(fmt.Errorf("error"))
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.PosService = posServiceMock
+
+	data, err := srvc.ConfirmDanaOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "error")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConfirmDana__OutletOnline_InitStatus_WithVoucher_MustReturnSuccess(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	posServiceMock := new(mocks.IPosService)
+	messageBrokerMock := new(mocks.IMessageBrokerProducer)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetStoreRepository").Return(storeRepoMock)
+	reposFactory.On("GetOfflineOutletRepo").Return(offlineOutletRepoMock)
+
+	var req request.ConfirmDanaOrderParams
+	req.OrderId = orderID
+	req.Status = PAYMENT_SUCCESS
+	req.Voucher.Amount = 10
+
+	orderRepoMock.On("GetDB", true).Return(nil)
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, "").Return(true)
+	posServiceMock.On("UpdateOrderStatus", request.UpdateRequest{
+		OrderID:            "",
+		Status:             CANCELLED,
+		Reason:             "Outlet is Inactive",
+		Type:               "",
+		Source:             "SYSTEM",
+		CaseOfCancellation: "POS_OFFLINE",
+	}).Return(nil)
+
+	orderRepoMock.On("GetOne", nil, req.OrderId).Return(&table.Order{
+		UserID:      userID,
+		RawData:     `{"createdDate":"2020-04-28T11:13:46+05:30"}`,
+		OrderStatus: INIT,
+	})
+
+	storeRepoMock.On("GetOne", nil, "").Return(&table.Store{})
+	orderRepoMock.On("ConfirmPayment", nil, &table.Order{
+		UserID:      "",
+		RawData:     "",
+		OrderStatus: "",
+	}, req).Return(nil)
+	orderRepoMock.On("UpdateVoucherCalculation", nil, &table.Order{
+		UserID:      "",
+		RawData:     "",
+		OrderStatus: "",
+	}, req.Voucher.Amount).Return(nil)
+	configMock.On("Topics", mock.Anything).Return(testConfig)
+
+	messageBrokerMock.On("Publish", testConfig.CreateOrder, []byte{0x7b, 0x22, 0x6f, 0x72, 0x64, 0x65, 0x72, 0x49, 0x64, 0x22, 0x3a, 0x22, 0x22, 0x7d}).Return(nil)
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.PosService = posServiceMock
+	srvc.MessageBroker = messageBrokerMock
+	srvc.Config = configMock
+
+	data, err := srvc.ConfirmDanaOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "error")
+	}
+	assert.NotNil(t, data, nil)
+}
+
+func Test_OrderConfirmDana__OutletOnline_InitStatus_UpdateVoucherCalculation_MustReturnError(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	posServiceMock := new(mocks.IPosService)
+	messageBrokerMock := new(mocks.IMessageBrokerProducer)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetStoreRepository").Return(storeRepoMock)
+	reposFactory.On("GetOfflineOutletRepo").Return(offlineOutletRepoMock)
+
+	var req request.ConfirmDanaOrderParams
+	req.OrderId = orderID
+	req.Status = PAYMENT_SUCCESS
+	req.Voucher.Amount = 10
+
+	orderRepoMock.On("GetDB", true).Return(nil)
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, "").Return(true)
+	posServiceMock.On("UpdateOrderStatus", request.UpdateRequest{
+		OrderID:            "",
+		Status:             CANCELLED,
+		Reason:             "Outlet is Inactive",
+		Type:               "",
+		Source:             "SYSTEM",
+		CaseOfCancellation: "POS_OFFLINE",
+	}).Return(nil)
+
+	orderRepoMock.On("GetOne", nil, req.OrderId).Return(&table.Order{
+		UserID:      userID,
+		RawData:     `{"createdDate":"2020-04-28T11:13:46+05:30"}`,
+		OrderStatus: INIT,
+	})
+
+	storeRepoMock.On("GetOne", nil, "").Return(&table.Store{})
+	orderRepoMock.On("ConfirmPayment", nil, &table.Order{
+		UserID:      "",
+		RawData:     "",
+		OrderStatus: "",
+	}, req).Return(nil)
+	orderRepoMock.On("UpdateVoucherCalculation", nil, &table.Order{
+		UserID:      "",
+		RawData:     "",
+		OrderStatus: "",
+	}, req.Voucher.Amount).Return(fmt.Errorf("error"))
+	configMock.On("Topics", mock.Anything).Return(testConfig)
+
+	messageBrokerMock.On("Publish", testConfig.CreateOrder, []byte{0x7b, 0x22, 0x6f, 0x72, 0x64, 0x65, 0x72, 0x49, 0x64, 0x22, 0x3a, 0x22, 0x22, 0x7d}).Return(nil)
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.PosService = posServiceMock
+	srvc.MessageBroker = messageBrokerMock
+	srvc.Config = configMock
+
+	data, err := srvc.ConfirmDanaOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "error")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConfirmDana__OutletOnline_PaymentSuccessStatus_MustReturnSuccess(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	posServiceMock := new(mocks.IPosService)
+	messageBrokerMock := new(mocks.IMessageBrokerProducer)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetStoreRepository").Return(storeRepoMock)
+	reposFactory.On("GetOfflineOutletRepo").Return(offlineOutletRepoMock)
+
+	var req request.ConfirmDanaOrderParams
+	req.OrderId = orderID
+	req.Status = PAYMENT_SUCCESS
+	req.Voucher.Amount = 10
+
+	orderRepoMock.On("GetDB", true).Return(nil)
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, "").Return(true)
+	posServiceMock.On("UpdateOrderStatus", request.UpdateRequest{
+		OrderID:            "",
+		Status:             CANCELLED,
+		Reason:             "Outlet is Inactive",
+		Type:               "",
+		Source:             "SYSTEM",
+		CaseOfCancellation: "POS_OFFLINE",
+	}).Return(nil)
+
+	orderRepoMock.On("GetOne", nil, req.OrderId).Return(&table.Order{
+		UserID:      userID,
+		RawData:     `{"createdDate":"2020-04-28T11:13:46+05:30"}`,
+		OrderStatus: PAYMENT_SUCCESS,
+	})
+
+	storeRepoMock.On("GetOne", nil, "").Return(&table.Store{})
+	orderRepoMock.On("ConfirmPayment", nil, &table.Order{
+		UserID:      "",
+		RawData:     "",
+		OrderStatus: "",
+	}, req).Return(nil)
+	orderRepoMock.On("UpdateVoucherCalculation", nil, &table.Order{
+		UserID:      "",
+		RawData:     "",
+		OrderStatus: "",
+	}, req.Voucher.Amount).Return(fmt.Errorf("error"))
+	configMock.On("Topics", mock.Anything).Return(testConfig)
+
+	messageBrokerMock.On("Publish", testConfig.CreateOrder, []byte{0x7b, 0x22, 0x6f, 0x72, 0x64, 0x65, 0x72, 0x49, 0x64, 0x22, 0x3a, 0x22, 0x22, 0x7d}).Return(nil)
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.PosService = posServiceMock
+	srvc.MessageBroker = messageBrokerMock
+	srvc.Config = configMock
+
+	data, err := srvc.ConfirmDanaOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "error")
+	}
+	assert.NotNil(t, data, nil)
+}
+
+func Test_OrderConfirmDana__OutletOnline_PaymentSuccessStatus_Publish_MustReturnError(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	posServiceMock := new(mocks.IPosService)
+	messageBrokerMock := new(mocks.IMessageBrokerProducer)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetStoreRepository").Return(storeRepoMock)
+	reposFactory.On("GetOfflineOutletRepo").Return(offlineOutletRepoMock)
+
+	var req request.ConfirmDanaOrderParams
+	req.OrderId = orderID
+	req.Status = PAYMENT_SUCCESS
+	req.Voucher.Amount = 10
+
+	orderRepoMock.On("GetDB", true).Return(nil)
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, "").Return(true)
+	posServiceMock.On("UpdateOrderStatus", request.UpdateRequest{
+		OrderID:            "",
+		Status:             CANCELLED,
+		Reason:             "Outlet is Inactive",
+		Type:               "",
+		Source:             "SYSTEM",
+		CaseOfCancellation: "POS_OFFLINE",
+	}).Return(nil)
+
+	orderRepoMock.On("GetOne", nil, req.OrderId).Return(&table.Order{
+		UserID:      userID,
+		RawData:     `{"createdDate":"2020-04-28T11:13:46+05:30"}`,
+		OrderStatus: PAYMENT_SUCCESS,
+	})
+
+	storeRepoMock.On("GetOne", nil, "").Return(&table.Store{})
+	orderRepoMock.On("ConfirmPayment", nil, &table.Order{
+		UserID:      "",
+		RawData:     "",
+		OrderStatus: "",
+	}, req).Return(nil)
+	orderRepoMock.On("UpdateVoucherCalculation", nil, &table.Order{
+		UserID:      "",
+		RawData:     "",
+		OrderStatus: "",
+	}, req.Voucher.Amount).Return(fmt.Errorf("error"))
+	configMock.On("Topics", mock.Anything).Return(testConfig)
+
+	messageBrokerMock.On("Publish", testConfig.CreateOrder, []byte{0x7b, 0x22, 0x6f, 0x72, 0x64, 0x65, 0x72, 0x49, 0x64, 0x22, 0x3a, 0x22, 0x22, 0x7d}).Return(fmt.Errorf("error"))
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.PosService = posServiceMock
+	srvc.MessageBroker = messageBrokerMock
+	srvc.Config = configMock
+
+	data, err := srvc.ConfirmDanaOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "error")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderCalculate_MustReturnSuccess(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "calculate"
+
+	orderRepoMock.On("GetDB", true).Return(nil)
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+	converterMock.On("CalculateOrder", nil, req, []*table.MenuItem{}).Return(&response.OrderCalculationResponse{}, nil)
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.CalculateOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "error")
+	}
+	assert.NotNil(t, data, nil)
+}
+
+func Test_OrderCalculate_GetOneWithField_MustReturnError(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "calculate"
+
+	orderRepoMock.On("GetDB", true).Return(nil)
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(&table.Order{})
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+	converterMock.On("CalculateOrder", nil, req, []*table.MenuItem{}).Return(&response.OrderCalculationResponse{}, nil)
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.CalculateOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "Order already exist with request_id.")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderCalculate_CalculateOrder_MustReturnError(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "calculate"
+
+	orderRepoMock.On("GetDB", true).Return(nil)
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+	converterMock.On("CalculateOrder", nil, req, []*table.MenuItem{}).Return(nil, fmt.Errorf("error"))
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.CalculateOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "error")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConsult_MustReturnSuccess(t *testing.T) {
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "consult"
+	req.DestinationStore = &request.StoreDestinationConsult{
+		OutletCode: outletCode,
+	}
+	req.User = &request.UserConsult{
+		Name: "userName",
+	}
+
+	models := &table.OrderModels{
+		Orders: &table.Order{
+			OrderStatus: INIT,
+		},
+		OrderCalculation: &table.OrderCalculation{
+			RawData: `[{"key":"totalAmount","value":10000},{"key":"totalFnB","value":10000}]`,
+		},
+	}
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("CountOrderByToday", nil, outletCode).Return(int64(1))
+	orderRepoMock.On("Consult", nil, models).Return(nil)
+	converterMock.On("ConvertOrder", nil, req, "", []*table.MenuItem{}).Return(&table.OrderModels{}, nil)
+
+	orderRepoMock.On("GetOrderDetail", nil, "").Return(&response.OrderResponse{})
+	orderRepoMock.On("GetOrderMenuDetail", nil, "").Return([]*table.OrderMenuItem{})
+	orderRepoMock.On("UpdateRawData", nil, mock.Anything, mock.Anything).Return(nil)
+
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	offlineOutletRepoMock.On("OfflineOutletRepo", false).Return(nil)
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, outletCode).Return(true)
+	storeRepoMock.On("GetOne", nil, outletCode).Return(&table.Store{
+		Name:       testName,
+		Address:    address,
+		AreaName:   areaName,
+		OutletCode: outletCode,
+		CityName:   cityName,
+		IsActive:   true,
+	})
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+
+	configMock.On("Env").Return("")
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.Config = configMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.ConsultAndSaveOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "error")
+	}
+	assert.NotNil(t, data, nil)
+	assert.NotNil(t, models, nil)
+}
+
+func Test_OrderConsult_CheckOutletStatus_MustReturnError(t *testing.T) {
+
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "consult"
+	req.DestinationStore = &request.StoreDestinationConsult{
+		OutletCode: outletCode,
+	}
+	req.User = &request.UserConsult{
+		Name: "userName",
+	}
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("CountOrderByToday", nil, outletCode).Return(int64(1))
+
+	converterMock.On("ConvertOrder", nil, req, "", []*table.MenuItem{}).Return(&table.OrderModels{}, nil)
+
+	orderRepoMock.On("GetOrderDetail", nil, "").Return(&response.OrderResponse{})
+	orderRepoMock.On("GetOrderMenuDetail", nil, "").Return([]*table.OrderMenuItem{})
+	orderRepoMock.On("UpdateRawData", nil, map[string]interface{}{}, "-0010504M200002").Return(nil)
+
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	offlineOutletRepoMock.On("OfflineOutletRepo", false).Return(nil)
+	offlineOutletRepoMock.On("IncrementUserOrderCount", nil, outletCode).Return(fmt.Errorf("error"))
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, outletCode).Return(false)
+	storeRepoMock.On("GetOne", nil, outletCode).Return(&table.Store{
+		Name:       testName,
+		Address:    address,
+		AreaName:   areaName,
+		OutletCode: outletCode,
+		CityName:   cityName,
+		IsActive:   true,
+	})
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+
+	configMock.On("Env").Return("")
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.Config = configMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.ConsultAndSaveOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "We are sorry, Our system is under maintenance. Please order at the cashier.")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConsult_CheckOutletStatus_StoreNotExist_MustReturnError(t *testing.T) {
+
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "consult"
+	req.DestinationStore = &request.StoreDestinationConsult{
+		OutletCode: outletCode,
+	}
+	req.User = &request.UserConsult{
+		Name: "userName",
+	}
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("CountOrderByToday", nil, outletCode).Return(int64(1))
+
+	converterMock.On("ConvertOrder", nil, req, "", []*table.MenuItem{}).Return(&table.OrderModels{}, nil)
+
+	orderRepoMock.On("GetOrderDetail", nil, "").Return(&response.OrderResponse{})
+	orderRepoMock.On("GetOrderMenuDetail", nil, "").Return([]*table.OrderMenuItem{})
+	orderRepoMock.On("UpdateRawData", nil, map[string]interface{}{}, "-0010504M200002").Return(nil)
+
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	offlineOutletRepoMock.On("OfflineOutletRepo", false).Return(nil)
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, outletCode).Return(true)
+	storeRepoMock.On("GetOne", nil, outletCode).Return(nil)
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+
+	configMock.On("Env").Return("")
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.Config = configMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.ConsultAndSaveOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "Outlet not exist.")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConsult_CheckOutletStatus_StoreInactive_HMD_MustReturnError(t *testing.T) {
+
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "consult"
+	req.OrderType = orderTypeHMD
+	req.DestinationStore = &request.StoreDestinationConsult{
+		OutletCode: outletCode,
+	}
+	req.User = &request.UserConsult{
+		Name: "userName",
+	}
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("CountOrderByToday", nil, outletCode).Return(int64(1))
+
+	converterMock.On("ConvertOrder", nil, req, "", []*table.MenuItem{}).Return(&table.OrderModels{}, nil)
+
+	orderRepoMock.On("GetOrderDetail", nil, "").Return(&response.OrderResponse{})
+	orderRepoMock.On("GetOrderMenuDetail", nil, "").Return([]*table.OrderMenuItem{})
+	orderRepoMock.On("UpdateRawData", nil, map[string]interface{}{}, "-0010504M200002").Return(nil)
+
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	offlineOutletRepoMock.On("OfflineOutletRepo", false).Return(nil)
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, outletCode).Return(true)
+	storeRepoMock.On("GetOne", nil, outletCode).Return(&table.Store{
+		Name:       testName,
+		Address:    address,
+		AreaName:   areaName,
+		OutletCode: outletCode,
+		CityName:   cityName,
+		IsActive:   false,
+	})
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+
+	configMock.On("Env").Return("")
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.Config = configMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.ConsultAndSaveOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "We are sorry, our system is under maintenance. Please contact 14022 to order.")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConsult_CheckOutletStatus_StoreInactive_PNP_MustReturnError(t *testing.T) {
+
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "consult"
+	req.OrderType = orderTypePNP
+	req.DestinationStore = &request.StoreDestinationConsult{
+		OutletCode: outletCode,
+	}
+	req.User = &request.UserConsult{
+		Name: "userName",
+	}
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("CountOrderByToday", nil, outletCode).Return(int64(1))
+
+	converterMock.On("ConvertOrder", nil, req, "", []*table.MenuItem{}).Return(&table.OrderModels{}, nil)
+
+	orderRepoMock.On("GetOrderDetail", nil, "").Return(&response.OrderResponse{})
+	orderRepoMock.On("GetOrderMenuDetail", nil, "").Return([]*table.OrderMenuItem{})
+	orderRepoMock.On("UpdateRawData", nil, map[string]interface{}{}, "-0010504M200002").Return(nil)
+
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	offlineOutletRepoMock.On("OfflineOutletRepo", false).Return(nil)
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, outletCode).Return(true)
+	storeRepoMock.On("GetOne", nil, outletCode).Return(&table.Store{
+		Name:       testName,
+		Address:    address,
+		AreaName:   areaName,
+		OutletCode: outletCode,
+		CityName:   cityName,
+		IsActive:   false,
+	})
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+
+	configMock.On("Env").Return("")
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.Config = configMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.ConsultAndSaveOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "We are sorry, Our system is under maintenance. Please order at the cashier.")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConsult_CheckOutletStatus_PNP_Schedule_MustReturnError(t *testing.T) {
+
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "consult"
+	req.OrderType = orderTypePNP
+	req.DestinationStore = &request.StoreDestinationConsult{
+		OutletCode: outletCode,
+	}
+	req.User = &request.UserConsult{
+		Name: "userName",
+	}
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("CountOrderByToday", nil, outletCode).Return(int64(1))
+
+	converterMock.On("ConvertOrder", nil, req, "", []*table.MenuItem{}).Return(&table.OrderModels{}, nil)
+
+	orderRepoMock.On("GetOrderDetail", nil, "").Return(&response.OrderResponse{})
+	orderRepoMock.On("GetOrderMenuDetail", nil, "").Return([]*table.OrderMenuItem{})
+	orderRepoMock.On("UpdateRawData", nil, map[string]interface{}{}, "-0010504M200002").Return(nil)
+
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	offlineOutletRepoMock.On("OfflineOutletRepo", false).Return(nil)
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, outletCode).Return(true)
+	storeRepoMock.On("GetOne", nil, outletCode).Return(&table.Store{
+		Name:       testName,
+		Address:    address,
+		AreaName:   areaName,
+		OutletCode: outletCode,
+		CityName:   cityName,
+		IsActive:   true,
+	})
+	storeRepoMock.On("CheckStoreOpenSchedule", nil, outletCode).Return(nil)
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+
+	configMock.On("Env").Return("")
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.Config = configMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.ConsultAndSaveOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "We are sorry, this outlet is currently outside operational hours.")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConsult_CheckOutletStatus_HMD_IsDelivery_MustReturnError(t *testing.T) {
+
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "consult"
+	req.OrderType = orderTypeHMD
+	req.DestinationStore = &request.StoreDestinationConsult{
+		OutletCode: outletCode,
+	}
+	req.User = &request.UserConsult{
+		Name: "userName",
+	}
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("CountOrderByToday", nil, outletCode).Return(int64(1))
+
+	converterMock.On("ConvertOrder", nil, req, "", []*table.MenuItem{}).Return(&table.OrderModels{}, nil)
+
+	orderRepoMock.On("GetOrderDetail", nil, "").Return(&response.OrderResponse{})
+	orderRepoMock.On("GetOrderMenuDetail", nil, "").Return([]*table.OrderMenuItem{})
+	orderRepoMock.On("UpdateRawData", nil, map[string]interface{}{}, "-0010504M200002").Return(nil)
+
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	offlineOutletRepoMock.On("OfflineOutletRepo", false).Return(nil)
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, outletCode).Return(true)
+	storeRepoMock.On("GetOne", nil, outletCode).Return(&table.Store{
+		Name:           testName,
+		Address:        address,
+		AreaName:       areaName,
+		OutletCode:     outletCode,
+		CityName:       cityName,
+		IsActive:       true,
+		IsHomeDelivery: false,
+	})
+	storeRepoMock.On("CheckStoreOpenSchedule", nil, outletCode).Return(nil)
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+
+	configMock.On("Env").Return("")
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.Config = configMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.ConsultAndSaveOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "We are sorry, your order can't be processed at the moment. Please contact 14022 to order.")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConsult_CheckOutletStatus_HMD_Schedule_MustReturnError(t *testing.T) {
+
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "consult"
+	req.OrderType = orderTypeHMD
+	req.DestinationStore = &request.StoreDestinationConsult{
+		OutletCode: outletCode,
+	}
+	req.User = &request.UserConsult{
+		Name: "userName",
+	}
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("CountOrderByToday", nil, outletCode).Return(int64(1))
+
+	converterMock.On("ConvertOrder", nil, req, "", []*table.MenuItem{}).Return(&table.OrderModels{}, nil)
+
+	orderRepoMock.On("GetOrderDetail", nil, "").Return(&response.OrderResponse{})
+	orderRepoMock.On("GetOrderMenuDetail", nil, "").Return([]*table.OrderMenuItem{})
+	orderRepoMock.On("UpdateRawData", nil, map[string]interface{}{}, "-0010504M200002").Return(nil)
+
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	offlineOutletRepoMock.On("OfflineOutletRepo", false).Return(nil)
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, outletCode).Return(true)
+	storeRepoMock.On("GetOne", nil, outletCode).Return(&table.Store{
+		Name:           testName,
+		Address:        address,
+		AreaName:       areaName,
+		OutletCode:     outletCode,
+		CityName:       cityName,
+		IsActive:       true,
+		IsHomeDelivery: true,
+	})
+	storeRepoMock.On("CheckStoreDeliverySchedule", nil, outletCode).Return(nil)
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+
+	configMock.On("Env").Return("")
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.Config = configMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.ConsultAndSaveOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "We are sorry, our delivery service is currently unavailable.")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConsult_CheckOutletStatus_OrderExist_MustReturnError(t *testing.T) {
+
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "consult"
+	//req.OrderType = orderTypeHMD
+	req.DestinationStore = &request.StoreDestinationConsult{
+		OutletCode: outletCode,
+	}
+	req.User = &request.UserConsult{
+		Name: "userName",
+	}
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("CountOrderByToday", nil, outletCode).Return(int64(1))
+
+	converterMock.On("ConvertOrder", nil, req, "", []*table.MenuItem{}).Return(&table.OrderModels{}, nil)
+
+	orderRepoMock.On("GetOrderDetail", nil, "").Return(&response.OrderResponse{})
+	orderRepoMock.On("GetOrderMenuDetail", nil, "").Return([]*table.OrderMenuItem{})
+	orderRepoMock.On("UpdateRawData", nil, map[string]interface{}{}, "-0010504M200002").Return(nil)
+
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	offlineOutletRepoMock.On("OfflineOutletRepo", false).Return(nil)
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, outletCode).Return(true)
+	storeRepoMock.On("GetOne", nil, outletCode).Return(&table.Store{
+		Name:       testName,
+		Address:    address,
+		AreaName:   areaName,
+		OutletCode: outletCode,
+		CityName:   cityName,
+		IsActive:   true,
+	})
+	storeRepoMock.On("CheckStoreDeliverySchedule", nil, outletCode).Return(nil)
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(&table.Order{})
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+
+	configMock.On("Env").Return("")
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.Config = configMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.ConsultAndSaveOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "Order already exist with request_id.")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConsult_CheckOutletStatus_MenuNotExist_MustReturnError(t *testing.T) {
+
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "consult"
+	//req.OrderType = orderTypeHMD
+	req.DestinationStore = &request.StoreDestinationConsult{
+		OutletCode: outletCode,
+	}
+	req.User = &request.UserConsult{
+		Name: "userName",
+	}
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("CountOrderByToday", nil, outletCode).Return(int64(1))
+
+	converterMock.On("ConvertOrder", nil, req, "", []*table.MenuItem{}).Return(&table.OrderModels{}, nil)
+
+	orderRepoMock.On("GetOrderDetail", nil, "").Return(&response.OrderResponse{})
+	orderRepoMock.On("GetOrderMenuDetail", nil, "").Return([]*table.OrderMenuItem{})
+	orderRepoMock.On("UpdateRawData", nil, map[string]interface{}{}, "-0010504M200002").Return(nil)
+
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	offlineOutletRepoMock.On("OfflineOutletRepo", false).Return(nil)
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, outletCode).Return(true)
+	storeRepoMock.On("GetOne", nil, outletCode).Return(&table.Store{
+		Name:       testName,
+		Address:    address,
+		AreaName:   areaName,
+		OutletCode: outletCode,
+		CityName:   cityName,
+		IsActive:   true,
+	})
+	storeRepoMock.On("CheckStoreDeliverySchedule", nil, outletCode).Return(nil)
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, fmt.Errorf("error"))
+
+	configMock.On("Env").Return("")
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.Config = configMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.ConsultAndSaveOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "error")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConsult_CheckOutletStatus_ConvertOrder_MustReturnError(t *testing.T) {
+
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "consult"
+	//req.OrderType = orderTypeHMD
+	req.DestinationStore = &request.StoreDestinationConsult{
+		OutletCode: outletCode,
+	}
+	req.User = &request.UserConsult{
+		Name: "userName",
+	}
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("CountOrderByToday", nil, outletCode).Return(int64(1))
+
+	converterMock.On("ConvertOrder", nil, req, "", []*table.MenuItem{}).Return(&table.OrderModels{}, fmt.Errorf("error"))
+
+	orderRepoMock.On("GetOrderDetail", nil, "").Return(&response.OrderResponse{})
+	orderRepoMock.On("GetOrderMenuDetail", nil, "").Return([]*table.OrderMenuItem{})
+	orderRepoMock.On("UpdateRawData", nil, map[string]interface{}{}, "-0010504M200002").Return(nil)
+
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	offlineOutletRepoMock.On("OfflineOutletRepo", false).Return(nil)
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, outletCode).Return(true)
+	storeRepoMock.On("GetOne", nil, outletCode).Return(&table.Store{
+		Name:       testName,
+		Address:    address,
+		AreaName:   areaName,
+		OutletCode: outletCode,
+		CityName:   cityName,
+		IsActive:   true,
+	})
+	storeRepoMock.On("CheckStoreDeliverySchedule", nil, outletCode).Return(nil)
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+
+	configMock.On("Env").Return("")
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.Config = configMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.ConsultAndSaveOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "error")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConsult_CheckOutletStatus_Consult_MustReturnError(t *testing.T) {
+
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "consult"
+	//req.OrderType = orderTypeHMD
+	req.DestinationStore = &request.StoreDestinationConsult{
+		OutletCode: outletCode,
+	}
+	req.User = &request.UserConsult{
+		Name: "userName",
+	}
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("CountOrderByToday", nil, outletCode).Return(int64(1))
+
+	converterMock.On("ConvertOrder", nil, req, "", []*table.MenuItem{}).Return(&table.OrderModels{}, nil)
+
+	orderRepoMock.On("GetOrderDetail", nil, "").Return(&response.OrderResponse{})
+	orderRepoMock.On("GetOrderMenuDetail", nil, "").Return([]*table.OrderMenuItem{})
+	orderRepoMock.On("UpdateRawData", nil, map[string]interface{}{}, "-0010504M200002").Return(nil)
+
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	offlineOutletRepoMock.On("OfflineOutletRepo", false).Return(nil)
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, outletCode).Return(true)
+	storeRepoMock.On("GetOne", nil, outletCode).Return(&table.Store{
+		Name:       testName,
+		Address:    address,
+		AreaName:   areaName,
+		OutletCode: outletCode,
+		CityName:   cityName,
+		IsActive:   true,
+	})
+	storeRepoMock.On("CheckStoreDeliverySchedule", nil, outletCode).Return(nil)
+	models := &table.OrderModels{
+		Orders: &table.Order{
+			OrderStatus: INIT,
+		},
+		OrderCalculation: &table.OrderCalculation{
+			RawData: `[{"key":"totalAmount","value":10000},{"key":"totalFnB","value":10000}]`,
+		},
+	}
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+	orderRepoMock.On("Consult", nil, models).Return(fmt.Errorf("error"))
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+
+	configMock.On("Env").Return("development")
+	configMock.On("OrderRequest").Return(&config.OrderRequest{
+		OrderIDIncrementor: 1,
+	})
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.Config = configMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.ConsultAndSaveOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "error")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConsult_CheckOutletStatus_UpdateRawData_MustReturnError(t *testing.T) {
+
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "consult"
+	//req.OrderType = orderTypeHMD
+	req.DestinationStore = &request.StoreDestinationConsult{
+		OutletCode: outletCode,
+	}
+	req.User = &request.UserConsult{
+		Name: "userName",
+	}
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("CountOrderByToday", nil, outletCode).Return(int64(1))
+
+	converterMock.On("ConvertOrder", nil, req, "", []*table.MenuItem{}).Return(&table.OrderModels{}, nil)
+
+	orderRepoMock.On("GetOrderDetail", nil, "").Return(&response.OrderResponse{})
+	orderRepoMock.On("GetOrderMenuDetail", nil, "").Return([]*table.OrderMenuItem{})
+	orderRepoMock.On("UpdateRawData", nil, mock.Anything, mock.Anything).Return(fmt.Errorf("error"))
+
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	offlineOutletRepoMock.On("OfflineOutletRepo", false).Return(nil)
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, outletCode).Return(true)
+	storeRepoMock.On("GetOne", nil, outletCode).Return(&table.Store{
+		Name:       testName,
+		Address:    address,
+		AreaName:   areaName,
+		OutletCode: outletCode,
+		CityName:   cityName,
+		IsActive:   true,
+	})
+	storeRepoMock.On("CheckStoreDeliverySchedule", nil, outletCode).Return(nil)
+	models := &table.OrderModels{
+		Orders: &table.Order{
+			OrderStatus: INIT,
+		},
+		OrderCalculation: &table.OrderCalculation{
+			RawData: `[{"key":"totalAmount","value":10000},{"key":"totalFnB","value":10000}]`,
+		},
+	}
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+	orderRepoMock.On("Consult", nil, models).Return(nil)
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+
+	configMock.On("Env").Return("")
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.Config = configMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.ConsultAndSaveOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "error")
+	}
+	assert.Nil(t, data, nil)
+}
+
+func Test_OrderConsult_CheckOutletStatus_HMD_MaxnumberReached_MustReturnError(t *testing.T) {
+
+	reposFactory := new(mocks.ReposFactoryMock)
+	orderRepoMock := new(mocks.IOrderRepo)
+	menuItemRepoMock := new(mocks.IMenuItemRepo)
+	converterMock := new(mocks.IOrderConverterService)
+	offlineOutletRepoMock := new(mocks.IOfflineOutletRepo)
+	storeRepoMock := new(mocks.IStoreRepo)
+	configMock := new(mocks.IConfig)
+
+	reposFactory.On("GetOrderRepository").Return(orderRepoMock)
+	reposFactory.On("GetMenuItemRepository").Return(menuItemRepoMock)
+
+	var req request.ConsultOrderParams
+	req.Type = "consult"
+	req.OrderType = orderTypeHMD
+	req.DestinationStore = &request.StoreDestinationConsult{
+		OutletCode: outletCode,
+	}
+	req.User = &request.UserConsult{
+		Name: "userName",
+	}
+
+	orderRepoMock.On("GetDB", false).Return(nil)
+	orderRepoMock.On("GetDB", true).Return(nil)
+	orderRepoMock.On("CountOrderByToday", nil, outletCode).Return(int64(1))
+	orderRepoMock.On("GetOrderPerUser", nil, "").Return([]*table.Order{
+		&table.Order{OrderStatus: orderTypeHMD},
+	})
+	configMock.On("OrderRequest").Return(&config.OrderRequest{
+		OrderIDIncrementor: 1,
+		MaxOrderNumber:     0,
+	})
+
+	converterMock.On("ConvertOrder", nil, req, "", []*table.MenuItem{}).Return(&table.OrderModels{}, nil)
+
+	orderRepoMock.On("GetOrderDetail", nil, "").Return(&response.OrderResponse{})
+	orderRepoMock.On("GetOrderMenuDetail", nil, "").Return([]*table.OrderMenuItem{})
+	orderRepoMock.On("UpdateRawData", nil, map[string]interface{}{}, "-0010504M200002").Return(nil)
+
+	offlineOutletRepoMock.On("GetDB", false).Return(nil)
+	offlineOutletRepoMock.On("OfflineOutletRepo", false).Return(nil)
+	offlineOutletRepoMock.On("CheckOutletStatus", nil, outletCode).Return(true)
+	storeRepoMock.On("GetOne", nil, outletCode).Return(&table.Store{
+		Name:           testName,
+		Address:        address,
+		AreaName:       areaName,
+		OutletCode:     outletCode,
+		CityName:       cityName,
+		IsActive:       true,
+		IsHomeDelivery: true,
+	})
+	storeRepoMock.On("CheckStoreDeliverySchedule", nil, outletCode).Return(&table.StoreDeliverySchedule{})
+
+	orderRepoMock.On("RollbackOnException", nil).Return()
+	orderRepoMock.On("RollbackTransaction", nil).Return()
+	orderRepoMock.On("CommitTransaction", nil).Return()
+
+	orderRepoMock.On("GetOneWithField", nil, req.RequestID, "request_id").Return(nil)
+	menuItemRepoMock.On("CheckMenuAvailability", nil, req).Return([]*table.MenuItem{}, nil)
+
+	configMock.On("Env").Return("")
+
+	var srvc AppService
+	srvc.OrderRepo = orderRepoMock
+	srvc.OfflineOutletRepo = offlineOutletRepoMock
+	srvc.StoreRepo = storeRepoMock
+	srvc.Config = configMock
+	srvc.MenuItemRepo = menuItemRepoMock
+	srvc.Converter = converterMock
+
+	data, err := srvc.ConsultAndSaveOrder(req)
+	if err != nil {
+		assert.Equal(t, err.Error(), "You have reached to maximum order limit.")
+	}
+	assert.Nil(t, data, nil)
+}
